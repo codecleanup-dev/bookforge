@@ -31,6 +31,10 @@ def md_to_html(md: str, *, allow_html: bool = True) -> str:
     pipeline keeps the historical raw-HTML behavior unless the caller opts out.
     """
     parser = MD if allow_html else SAFE_MD
+
+    def literal(value: str) -> str:
+        return value if allow_html else _esc(value)
+
     out, lines, buf = [], md.split("\n"), []
     def flush():
         if buf:
@@ -48,18 +52,18 @@ def md_to_html(md: str, *, allow_html: bool = True) -> str:
             i += 1
             if kind == "pull":
                 ls = [l.strip() for l in body if l.strip()]
-                quote_t = _esc(ls[0]) if ls else ""
-                speaker = _esc(ls[1]) if len(ls) > 1 else ""
+                quote_t = literal(ls[0]) if ls else ""
+                speaker = literal(ls[1]) if len(ls) > 1 else ""
                 sp = f'<div class="pull-speaker">{speaker}</div>' if speaker else ""
                 out.append(f'<section class="pullquote"><div class="pull-text">{quote_t}</div>{sp}</section>')
             elif kind == "stat":
                 ls = [l.strip() for l in body if l.strip()]
-                value = _esc(ls[0]) if ls else ""
-                label = _esc(ls[1]) if len(ls) > 1 else ""
+                value = literal(ls[0]) if ls else ""
+                label = literal(ls[1]) if len(ls) > 1 else ""
                 out.append(f'<div class="stat"><span class="stat-value">{value}</span>'
                            f'<span class="stat-label">{label}</span></div>')
             else:
-                t = f'<div class="callout-title">{_esc(title)}</div>' if title else ""
+                t = f'<div class="callout-title">{literal(title)}</div>' if title else ""
                 out.append(f'<div class="callout callout-{kind}">{t}'
                            f'{parser.render(chr(10).join(body))}</div>')
         else:

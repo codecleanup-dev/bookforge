@@ -13,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+from build_html import md_to_html  # noqa: E402
+from qc_gate import resolve_style_tokens  # noqa: E402
 from slop_lint import (SlopLintError, _scan_in_worker, lint_book,  # noqa: E402
                        load_patterns, resolve_chapter_files)
 
@@ -71,6 +73,24 @@ class SlopLintTests(BookFixture):
         self.assertEqual(1, result["counts"]["fail"])
         self.assertEqual("본문 — 검출", result["findings"][0]["excerpt"])
 
+    def test_commonmark_container_and_indented_code_are_excluded(self):
+        self.write_book(
+            "# 테스트\n\n"
+            "    들여쓰기 코드 — 제외\n\n"
+            "> ~~~\n"
+            "> 인용 코드 — 제외\n"
+            "> ~~~\n\n"
+            "- ~~~\n"
+            "  목록 코드 — 제외\n"
+            "  ~~~\n\n"
+            "본문 — 검출\n"
+        )
+
+        result = lint_book(self.book)
+
+        self.assertEqual(1, result["counts"]["fail"])
+        self.assertEqual("본문 — 검출", result["findings"][0]["excerpt"])
+
     def test_multiline_code_span_is_excluded_and_escaped_backticks_are_prose(self):
         self.write_book(
             "# 테스트\n\n"
@@ -121,6 +141,15 @@ class SlopLintTests(BookFixture):
                 (self.book / "slop-patterns.json").write_text(json.dumps(payload), encoding="utf-8")
                 with self.assertRaises(SlopLintError):
                     lint_book(self.book)
+
+    def test_zero_width_pattern_fails_closed(self):
+        self.write_book("# 테스트\n\na\n")
+        (self.book / "slop-patterns.json").write_text(json.dumps({
+            "patterns": [{"id": "zero", "regex": "(?=a)", "level": "fail"}],
+        }), encoding="utf-8")
+
+        with self.assertRaisesRegex(SlopLintError, "0자 길이"):
+            lint_book(self.book)
 
     def test_pattern_override_symlink_fails_closed(self):
         self.write_book()
@@ -214,6 +243,24 @@ class SlopLintTests(BookFixture):
                 self.assertIn("fail-closed", result.stderr + result.stdout)
                 self.assertNotIn("Traceback", result.stderr + result.stdout)
 
+    def test_spawn_worker_fallback_route_scans_and_times_out(self):
+        self.write_book("# 테스트\n\n본문 — 검출\n", mode="warn")
+        with mock.patch("slop_lint.threading.current_thread", return_value=object()), \
+                mock.patch.dict(os.environ, {"SLOP_LINT_TIMEOUT": "3"}):
+            result = lint_book(self.book)
+        self.assertEqual(1, result["counts"]["fail"])
+
+        self.write_book("# 테스트\n\n" + "a" * 40 + "b\n", mode="warn")
+        (self.book / "slop-patterns.json").write_text(json.dumps({
+            "patterns": [{"id": "redos", "regex": "^(a+)+$", "level": "fail"}],
+        }), encoding="utf-8")
+        started = time.monotonic()
+        with mock.patch("slop_lint.threading.current_thread", return_value=object()), \
+                mock.patch.dict(os.environ, {"SLOP_LINT_TIMEOUT": "0.05"}):
+            with self.assertRaisesRegex(SlopLintError, "초과"):
+                lint_book(self.book)
+        self.assertLess(time.monotonic() - started, 3)
+
     def test_spawn_worker_fallback_scans_without_posix_signals(self):
         self.write_book("# 테스트\n\n본문 — 검출\n", mode="warn")
         patterns, _ = load_patterns(self.book)
@@ -229,6 +276,26 @@ class SlopLintTests(BookFixture):
 
         self.assertEqual(2, result.returncode, result.stderr)
         self.assertIn("FAIL", result.stdout)
+
+
+class BuildHtmlTests(unittest.TestCase):
+    def test_print_path_preserves_raw_html_while_preview_path_escapes_it(self):
+        source = (
+            "::: pull\n<em>인용</em>\n<strong>화자</strong>\n:::\n\n"
+            "::: info <b>제목</b>\n<script>본문</script>\n:::\n"
+        )
+
+        printed = md_to_html(source)
+        previewed = md_to_html(source, allow_html=False)
+
+        self.assertIn("<em>인용</em>", printed)
+        self.assertIn("<strong>화자</strong>", printed)
+        self.assertIn('<div class="callout-title"><b>제목</b></div>', printed)
+        self.assertIn("<script>본문</script>", printed)
+        self.assertIn("&lt;em&gt;인용&lt;/em&gt;", previewed)
+        self.assertIn("&lt;strong&gt;화자&lt;/strong&gt;", previewed)
+        self.assertIn("&lt;b&gt;제목&lt;/b&gt;", previewed)
+        self.assertIn("&lt;script&gt;본문&lt;/script&gt;", previewed)
 
 
 class PreviewTests(BookFixture):
@@ -322,6 +389,22 @@ class PreviewTests(BookFixture):
         self.assertEqual(1, lint["counts"]["fail"])
         self.assertEqual(5, lint["findings"][0]["line"])
 
+    def test_overlapping_findings_highlight_their_union(self):
+        self.write_book("# 테스트\n\nabcd\n")
+        (self.book / "slop-patterns.json").write_text(json.dumps({
+            "patterns": [
+                {"id": "left", "regex": "abc", "level": "fail"},
+                {"id": "right", "regex": "bcd", "level": "warn"},
+            ],
+        }), encoding="utf-8")
+
+        result = self.run_script("preview.py")
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        html = (self.book / "preview" / "manuscript.html").read_text(encoding="utf-8")
+        self.assertIn('<mark class="slop">abcd</mark>', html)
+        self.assertEqual(1, html.count('<mark class="slop">'))
+
     def test_preview_rejects_chapters_directory_symlink(self):
         self.write_book()
         chapter = self.book / "chapters" / "ch-01.md"
@@ -341,8 +424,56 @@ class PreviewTests(BookFixture):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("fail-closed", result.stderr + result.stdout)
 
+    def test_preview_rejects_invalid_utf8_without_traceback(self):
+        self.write_book(mode="off")
+        (self.book / "chapters" / "ch-01.md").write_bytes(b"# title\n\xff\xfe")
+
+        result = self.run_script("preview.py")
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("fail-closed", result.stderr + result.stdout)
+        self.assertNotIn("Traceback", result.stderr)
+
 
 class QcGateTests(BookFixture):
+    def test_extension_style_path_is_allowed_without_fixed_whitelist(self):
+        skill = self.root / "skill"
+        style_dir = skill / "styles" / "custom-paper"
+        style_dir.mkdir(parents=True)
+        tokens = style_dir / "tokens.json"
+        tokens.write_text("{}", encoding="utf-8")
+
+        self.assertEqual(tokens, resolve_style_tokens(skill, "custom-paper"))
+        for invalid in ([], {}, "../outside", "nested/style"):
+            with self.subTest(invalid=invalid), self.assertRaises(SlopLintError):
+                resolve_style_tokens(skill, invalid)
+
+    def test_invalid_initial_config_writes_structured_failure_report(self):
+        self.write_book()
+        (self.book / "book.json").write_text("{not json", encoding="utf-8")
+
+        result = self.run_script("qc_gate.py")
+
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        report = json.loads((self.book / "gate-report.json").read_text(encoding="utf-8"))
+        self.assertFalse(report["gates"]["CONFIG"]["ok"])
+        self.assertIn("book.json", report["gates"]["CONFIG"]["error"])
+
+    def test_invalid_style_type_writes_structured_failure_report(self):
+        self.write_book()
+        book = json.loads((self.book / "book.json").read_text(encoding="utf-8"))
+        book["style"] = []
+        (self.book / "book.json").write_text(json.dumps(book), encoding="utf-8")
+
+        result = self.run_script("qc_gate.py")
+
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        report = json.loads((self.book / "gate-report.json").read_text(encoding="utf-8"))
+        self.assertFalse(report["gates"]["CONFIG"]["ok"])
+        self.assertIn("style", report["gates"]["CONFIG"]["error"])
+
     def test_g13_strict_failure_precedes_pdf_gate_and_writes_report(self):
         self.write_book("# 테스트\n\n본문 — 검출\n", mode="strict")
 
@@ -364,6 +495,17 @@ class QcGateTests(BookFixture):
         self.assertIn("error", report["gates"]["G13"])
         self.assertFalse(report["gates"]["G13"]["ok"])
 
+    def test_nonfinite_timeout_writes_g13_fail_closed_report(self):
+        self.write_book(mode="strict")
+
+        result = self.run_script("qc_gate.py", extra_env={"SLOP_LINT_TIMEOUT": "nan"})
+
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        report = json.loads((self.book / "gate-report.json").read_text(encoding="utf-8"))
+        self.assertFalse(report["gates"]["G13"]["ok"])
+        self.assertIn("error", report["gates"]["G13"])
+
     def test_g13_warn_records_warning_and_continues_to_g1(self):
         self.write_book("# 테스트\n\n본문 — 검출\n", mode="warn")
 
@@ -374,6 +516,7 @@ class QcGateTests(BookFixture):
         self.assertTrue(report["gates"]["G13"]["ok"])
         self.assertEqual(1, report["gates"]["G13"]["counts"]["fail"])
         self.assertIn("G1", report["gates"])
+        self.assertFalse(report["gates"]["G1"]["ok"])
         self.assertTrue(any("G13" in warning for warning in report["warns"]))
 
     def test_invalid_utf8_chapter_writes_g10_fail_closed_report(self):

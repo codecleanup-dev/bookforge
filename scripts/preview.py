@@ -113,12 +113,11 @@ def _mark_findings(source: str, findings: list, first_line: int) -> tuple[str, s
     marker_no = 0
     for line_idx, ranges in by_line.items():
         selected = []
-        last_end = -1
         for start, end in sorted(ranges):
-            if start < last_end:
-                continue
-            selected.append((start, end))
-            last_end = end
+            if selected and start <= selected[-1][1]:
+                selected[-1] = (selected[-1][0], max(selected[-1][1], end))
+            else:
+                selected.append((start, end))
         parts = []
         cursor = 0
         for start, end in selected:
@@ -160,7 +159,11 @@ def main():
     sections = []
     for idx, ch in enumerate(outline["chapters"], 1):
         src = chapter_paths[ch["file"]]
-        raw = src.read_text(encoding="utf-8")
+        try:
+            raw = src.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            sys.exit(f"preview: chapters/{ch['file']} 파일을 읽을 수 없습니다: "
+                     f"{exc} (fail-closed)")
         heading = re.match(r"^#\s+.*(?:\n|$)", raw)
         raw_body = raw[heading.end():] if heading else raw
         first_body_line = raw[:heading.end()].count("\n") + 1 if heading else 1
