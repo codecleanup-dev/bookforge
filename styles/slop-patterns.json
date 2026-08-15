@@ -1,0 +1,23 @@
+{
+  "_doc": "slop_lint.py 기본 지문. 한국어 산문의 AI-tell(기계 문체 흔적)만 담는다 — 고정밀 위주. book_dir/slop-patterns.json 이 있으면 이 파일 대신 통째로 쓰인다. level: fail = strict 모드에서 G13 하드 실패, warn = 보고만(사람 판단).",
+  "patterns": [
+    {
+      "id": "em-dash",
+      "regex": "—",
+      "level": "fail",
+      "desc": "엠대시 병기. 한국어 단행본 문장에는 쓰지 않는 기호 — 문장 분리(마침표)나 쉼표·괄호로 재서술"
+    },
+    {
+      "id": "en-dash-kr",
+      "regex": "(?<=[가-힣]) ?– ?(?=[가-힣])",
+      "level": "warn",
+      "desc": "한글 사이 엔대시. 숫자 범위(3–5)가 아닌 자리면 재서술 후보"
+    },
+    {
+      "id": "slash-join",
+      "regex": " / ",
+      "level": "warn",
+      "desc": "슬래시 접합 — 개조식 나열 흔적. 레이블·데이터 나열([검증됨] / [추론], 월별 수치)은 정당하므로 사람이 판단"
+    }
+  ]
+}

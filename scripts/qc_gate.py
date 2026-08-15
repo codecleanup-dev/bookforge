@@ -4,6 +4,7 @@
 Usage: python3 qc_gate.py <book_dir> [--refit]
 Gates (pagination.md §7):
   G10 quote   : (렌더 전) ::: pull 인용·콜아웃 수치가 챕터 본문에 실재 — 날조 차단
+  G13 slop    : (렌더 전) AI-tell 지문(slop_lint.py) — book.json "slop_lint" strict|warn|off
   G1  render  : draft/book.pdf exists; page count vs preset (PLAN=hard, --refit=WARN)
   G2  fonts   : every font fully embedded
   G3  overflow: no bbox escapes the page rect (tol 1.5pt)
@@ -25,6 +26,7 @@ import fitz  # PyMuPDF
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from pagemetrics import analyze  # noqa: E402
+from slop_lint import lint_book  # noqa: E402
 
 SKILL = Path(__file__).resolve().parent.parent
 TOL = 1.5  # pt
@@ -115,6 +117,21 @@ def main():
     report["gates"]["G10"] = {"problems": g10, "ok": not g10}
     if g10:
         finish(book_dir, report, ["G10: " + p for p in g10])
+
+    # ---- G13 (렌더 전 — AI-tell 지문. strict 모드만 하드, warn은 보고, off는 생략) ----
+    slop = lint_book(book_dir)
+    g13_fail = slop["mode"] == "strict" and slop["counts"]["fail"] > 0
+    report["gates"]["G13"] = {"mode": slop["mode"], "counts": slop["counts"],
+                              "findings": slop["findings"][:50], "ok": not g13_fail}
+    if g13_fail:
+        finish(book_dir, report, [
+            f"G13: {f['file']}:{f['line']} [{f['id']}] …{f['excerpt']}…"
+            for f in slop["findings"] if f["level"] == "fail"][:10])
+    if slop["counts"]["fail"] or slop["counts"]["warn"]:
+        msg = (f"G13: slop 지문 fail {slop['counts']['fail']} · warn {slop['counts']['warn']} "
+               f"(모드 {slop['mode']} — preview.py 하이라이트로 확인)")
+        report["warns"].append(msg)
+        print("WARN " + msg)
 
     pdf = book_dir / "draft" / "book.pdf"
 
