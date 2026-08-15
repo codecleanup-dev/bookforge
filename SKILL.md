@@ -24,6 +24,7 @@ npx --no-install playwright --version   # HTML 트랙(insight·magazine)에만 �
 ```
 [ ] P0 계약: 모드·스타일·분량 확정 → 책 프로젝트 스캐폴드
 [ ] P1 콘텐츠: outline.json + chapters/ch-NN.md 완성
+[ ] P1.5 원고 검수: preview.py → preview/manuscript.html 확인 (내용·문장·slop) — 조판 전 원고 확정
 [ ] P2-3 빌드: build.py → draft/book.pdf
 [ ] P4 게이트: qc_gate.py PASS → final/ 생성 확인
 [ ] P5 시각 검수: contact_sheet.py → 표지·차례·도비라·본문 4면 이상 눈으로 확인
@@ -75,6 +76,19 @@ python3 <SKILL>/scripts/scaffold.py <book_dir> --style practical \
 
 완료 기준: outline의 모든 장 파일이 존재하고, 각 파일 첫 줄이 `# {title}`이며, 분량 프리셋에 맞는 총 글자수(short 기준 본문 1.2만~2.2만 자)를 갖춘다.
 
+## P1.5 — 원고 검수 (조판 전, 생략 금지)
+
+```bash
+python3 <SKILL>/scripts/preview.py <book_dir>     # → preview/manuscript.html (slop 검사 포함)
+python3 <SKILL>/scripts/slop_lint.py <book_dir>   # 지문 검사만 따로 돌릴 때
+```
+
+`preview/manuscript.html`을 브라우저로 열어 내용과 문장을 확정하는 단계다. 연속 스크롤이라 페이지 분할은 없고, 장별 글자수와 slop 지문(하이라이트)이 함께 표시된다. **조판 후 문장 수정은 표 높이·페이지 분할을 되돌려 게이트 라운드를 재유발한다 — 문장 품질은 여기서 끝낸다.**
+
+- slop 지문 정의: `styles/slop-patterns.json`(기본) 또는 `<book_dir>/slop-patterns.json`(통째 오버라이드). fail 레벨(엠대시 등)은 재서술 필수, warn 레벨(슬래시 접합 등)은 정당한 데이터 나열인지 사람이 판단한다.
+- 게이트 모드: book.json `"slop_lint"` = `strict`(fail 지문 = G13 하드 실패, 신규 스캐폴드 기본) / `warn`(보고만 — 키 없는 기존 책 기본) / `off`.
+- HTML 트랙(insight·magazine)은 빌드 후 `typeset/book.html`을 열고 **브라우저 인쇄 미리보기**로 페이지 분할까지 사전 확인할 수 있다 — 인쇄 엔진이 곧 PDF 엔진이다.
+
 ## P2-4 — 빌드와 게이트
 
 ```bash
@@ -82,7 +96,7 @@ python3 <SKILL>/scripts/build.py <book_dir>          # → draft/book.pdf
 python3 <SKILL>/scripts/qc_gate.py <book_dir>        # PASS 시에만 final/<slug>.pdf 생성
 ```
 
-게이트: G10 인용·수치 실재(렌더 전) / G1 렌더·분량범위 / G2 폰트 임베드 / G3 오버플로 0 / G4 목차·북마크 정합 / G7 밀도(백면·꼬리 채움·판면 드리프트) / G8 공기 채움 / G9 제목 고립·widow / G11 사유 코드 무결성 / G12 필러 백면. 기준 수치와 대응법은 [references/pagination.md](references/pagination.md)가 정본이다.
+게이트: G10 인용·수치 실재(렌더 전) / G13 AI-tell 지문(렌더 전, strict 모드만 하드) / G1 렌더·분량범위 / G2 폰트 임베드 / G3 오버플로 0 / G4 목차·북마크 정합 / G7 밀도(백면·꼬리 채움·판면 드리프트) / G8 공기 채움 / G9 제목 고립·widow / G11 사유 코드 무결성 / G12 필러 백면. 기준 수치와 대응법은 [references/pagination.md](references/pagination.md)가 정본이다.
 
 실패 시 `gate-report.json`의 원인 항목만 고치고 재실행한다. **금지 대응**: 분량 미달을 부록·용어집 추가로 메우기, 절별 강제 개면, 빈 줄·행간 확대로 면 채우기 — 전부 게이트가 다시 잡는다. 올바른 대응: G7 꼬리 미달은 `refit.py`(자간 미세조정 자동 탐색) → 해 없으면 문단 1~2개 국소 증감 또는 `pageroles.json` 사유 코드(의도된 여백 선언, G11이 진위 검증). 재배치(원고 유지) 시에는 `qc_gate.py <dir> --refit`으로 분량범위를 WARN 강등. 같은 게이트 3회 연속 실패면 원인을 사용자에게 보고한다.
 
