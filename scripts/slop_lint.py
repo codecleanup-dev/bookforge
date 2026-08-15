@@ -25,15 +25,28 @@ SKILL = Path(__file__).resolve().parent.parent
 FENCE = re.compile(r"^\s*(```|~~~)")
 INLINE_CODE = re.compile(r"`[^`\n]*`")
 
+VALID_MODES = {"strict", "warn", "off"}
+VALID_LEVELS = {"fail", "warn"}
+
 
 def load_patterns(book_dir: Path):
+    """패턴 정의 로드. 설정 오류(미지 level·깨진 regex)는 fail-closed — 조용히 건너뛰면
+    strict 게이트가 fail-open이 되므로 즉시 중단한다."""
     for cand in (book_dir / "slop-patterns.json", SKILL / "styles" / "slop-patterns.json"):
         if cand.exists():
             data = json.loads(cand.read_text(encoding="utf-8"))
             pats = []
             for p in data.get("patterns", []):
-                pats.append({"id": p["id"], "re": re.compile(p["regex"]),
-                             "level": p.get("level", "warn"), "desc": p.get("desc", "")})
+                level = p.get("level", "warn")
+                if level not in VALID_LEVELS:
+                    sys.exit(f"slop-patterns: 알 수 없는 level '{level}' (id={p.get('id')}) "
+                             f"— {sorted(VALID_LEVELS)} 중 하나여야 합니다 ({cand})")
+                try:
+                    rx = re.compile(p["regex"])
+                except re.error as e:
+                    sys.exit(f"slop-patterns: 잘못된 정규식 (id={p.get('id')}): {e} ({cand})")
+                pats.append({"id": p["id"], "re": rx, "level": level,
+                             "desc": p.get("desc", "")})
             return pats, str(cand)
     return [], None
 
@@ -47,6 +60,10 @@ def lint_book(book_dir: Path) -> dict:
     book_dir = Path(book_dir)
     book = json.loads((book_dir / "book.json").read_text(encoding="utf-8"))
     mode = book.get("slop_lint", "warn")
+    if mode not in VALID_MODES:
+        # 오타("strcit" 등)가 조용히 비-strict로 동작하면 게이트가 fail-open — 즉시 중단
+        sys.exit(f"book.json slop_lint: 알 수 없는 모드 '{mode}' — "
+                 f"{sorted(VALID_MODES)} 중 하나여야 합니다")
     patterns, source = load_patterns(book_dir)
     findings = []
     if mode != "off" and patterns:

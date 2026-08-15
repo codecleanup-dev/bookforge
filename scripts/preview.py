@@ -112,8 +112,14 @@ def main():
 
     total = 0
     sections = []
+    ch_dir = (book_dir / "chapters").resolve()
     for idx, ch in enumerate(outline["chapters"], 1):
-        src = book_dir / "chapters" / ch["file"]
+        # outline의 file 값은 신뢰하지 않는다 — chapters/ 바로 아래의 일반 파일만 허용
+        # (절대경로·..·심볼릭 링크로 임의 파일이 프리뷰에 실리는 것 차단)
+        src = (ch_dir / ch["file"]).resolve()
+        if src.parent != ch_dir or not src.is_file():
+            sys.exit(f"outline.json: 잘못된 chapter file '{ch['file']}' — "
+                     f"chapters/ 바로 아래 파일명만 허용")
         raw = src.read_text(encoding="utf-8")
         raw_body = re.sub(r"^#\s+.*\n", "", raw, count=1)
         n = _stats(raw_body)
@@ -123,7 +129,7 @@ def main():
         body = _highlight(body, [f["match"] for f in by_file.get(ch["file"], [])])
         sections.append(
             f'<section class="chapter" id="ch{idx:02d}">'
-            f'<div class="ch-head"><div class="ch-num">{idx:02d} · {ch["file"]}</div>'
+            f'<div class="ch-head"><div class="ch-num">{idx:02d} · {_html.escape(ch["file"])}</div>'
             f'<h1>{_html.escape(ch["title"])}</h1>'
             f'<p class="ch-sum">{_html.escape(ch.get("summary") or "")}</p>'
             f'<div class="ch-stat">본문 {n:,}자 (공백 제외)</div></div>'
@@ -135,12 +141,16 @@ def main():
         lint_html = ('<div class="lintpanel"><h2>slop 검사</h2>'
                      '<span class="ok">지문 검출 0건 · 통과</span></div>')
     else:
+        # outline 밖의 chapters/*.md에서 나온 지문은 앵커 없이 표시 (크래시 금지)
+        ch_index = {c["file"]: i for i, c in enumerate(outline["chapters"], 1)}
         items = []
         for f in lint["findings"]:
+            name = _html.escape(f["file"])
+            idx = ch_index.get(f["file"])
+            loc = f'<a href="#ch{idx:02d}">{name}</a>' if idx else name
             items.append(
                 f'<li><span class="lv-{f["level"]}">{f["level"].upper()}</span> '
-                f'<a href="#ch{[c["file"] for c in outline["chapters"]].index(f["file"]) + 1:02d}">'
-                f'{f["file"]}</a>:{f["line"]} [{f["id"]}] '
+                f'{loc}:{f["line"]} [{_html.escape(f["id"])}] '
                 f'…{_html.escape(f["excerpt"])}…</li>')
         lint_html = (f'<div class="lintpanel"><h2>slop 검사: fail {lint["counts"]["fail"]} · '
                      f'warn {lint["counts"]["warn"]} (모드 {lint["mode"]})</h2>'
@@ -150,13 +160,18 @@ def main():
 
     doc = (
         '<!doctype html><html lang="ko"><head><meta charset="utf-8">'
+        # 검수 표면은 데이터 뷰어다 — 원고 유래 HTML이 섞여도 스크립트는 실행 금지 (XSS 차단)
+        '<meta http-equiv="Content-Security-Policy" content="script-src \'none\'; '
+        'object-src \'none\'; base-uri \'none\'; form-action \'none\'">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        f'<title>원고 검수 — {_html.escape(book.get("title", ""))}</title>'
+        f'<title>원고 검수 · {_html.escape(book.get("title", ""))}</title>'
         f'<style>{CSS}</style></head><body><div class="wrap">'
         f'<header class="book"><h1>{_html.escape(book.get("title", ""))}</h1>'
         f'<div class="sub">{_html.escape(book.get("subtitle") or "")}</div>'
-        f'<div class="meta">P1.5 원고 검수용 (페이지 분할 없음) · {book.get("style", "")} · '
-        f'{book.get("length", "")} · 총 {total:,}자 (공백 제외) · 장 {len(outline["chapters"])}개'
+        f'<div class="meta">P1.5 원고 검수용 (페이지 분할 없음) · '
+        f'{_html.escape(str(book.get("style", "")))} · '
+        f'{_html.escape(str(book.get("length", "")))} · 총 {total:,}자 (공백 제외) · '
+        f'장 {len(outline["chapters"])}개'
         f'</div></header>'
         f'{lint_html}'
         f'{"".join(sections)}'
