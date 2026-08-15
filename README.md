@@ -74,6 +74,7 @@ ln -sfn "$PWD" ~/.agents/skills/bookforge
 ```bash
 python3 scripts/scaffold.py mybook --style essay --title "제목" --length short
 # chapters/*.md 와 outline.json 작성 후
+python3 scripts/preview.py mybook      # → preview/manuscript.html (원고·slop 검수)
 python3 scripts/build.py mybook        # → draft/book.pdf
 python3 scripts/qc_gate.py mybook      # 게이트 통과 시에만 → final/mybook.pdf
 ```
@@ -84,11 +85,17 @@ python3 scripts/qc_gate.py mybook      # 게이트 통과 시에만 → final/my
 
 | 게이트 | 검사 |
 |---|---|
+| G10 | 렌더 전 인용·수치 실재 검증 |
+| G13 | 렌더 전 AI-tell 지문 검증 (`strict`/`warn`/`off`) |
 | G1 | 렌더 성공 + 분량 프리셋 범위 |
 | G2 | 폰트 전량 임베드 |
 | G3 | 본문 bbox 오버플로 0 |
 | G4 | 목차·북마크 ↔ 실제 장 시작 쪽 정합 |
-| G5 | 의도치 않은 빈 페이지 0 |
+| G7 | 판면·빈 면·꼬리·중간 면·문서 전체 밀도 |
+| G8 | 과대 간격·행송 확대로 만든 억지 채움 |
+| G9 | 제목 고립·widow·캡션/도판 분리 |
+| G11 | 의도된 여백 사유 코드 무결성 |
+| G12 | 단면 전자책의 recto/스프레드 필러 차단 |
 | G6 | 콘택트시트 시각 검수 (에이전트가 실물 페이지를 눈으로 확인) |
 
 ## 구조
@@ -98,7 +105,7 @@ SKILL.md            라우터 (모드 감지 → 파이프라인 → 서브 문�
 modes/              topic.md · manuscript.md
 styles/<6종>/       STYLE.md(규칙서) + theme.typ|theme.css + tokens.json
 templates/base.typ  Typst 공통 북 프리미티브
-scripts/            scaffold · build · qc_gate · contact_sheet · ingest_docx · fetch_fonts
+scripts/            scaffold · preview · slop_lint · build · qc_gate · contact_sheet · ingest_docx · fetch_fonts
 references/         생성 아트 정책 · 오케스트레이션 · 스타일 팩 확장 가이드
 examples/           예시 6종 PDF + 쇼케이스
 ```

@@ -19,15 +19,22 @@ from markdown_it import MarkdownIt
 
 MD = MarkdownIt("commonmark", {"html": True, "typographer": True}) \
     .enable("table").enable("strikethrough")
+SAFE_MD = MarkdownIt("commonmark", {"html": False, "typographer": True}) \
+    .enable("table").enable("strikethrough")
 
 CALLOUT_RE = re.compile(r"^:::\s*(info|tip|warn|quote|stat|pull)\s*(.*)$")
 
-def md_to_html(md: str) -> str:
-    """markdown subset -> html, with ::: callout directive support."""
+def md_to_html(md: str, *, allow_html: bool = True) -> str:
+    """markdown subset -> html, with ::: callout directive support.
+
+    ``allow_html=False`` is the untrusted manuscript-preview contract. The print
+    pipeline keeps the historical raw-HTML behavior unless the caller opts out.
+    """
+    parser = MD if allow_html else SAFE_MD
     out, lines, buf = [], md.split("\n"), []
     def flush():
         if buf:
-            out.append(MD.render("\n".join(buf)))
+            out.append(parser.render("\n".join(buf)))
             buf.clear()
     i = 0
     while i < len(lines):
@@ -41,19 +48,20 @@ def md_to_html(md: str) -> str:
             i += 1
             if kind == "pull":
                 ls = [l.strip() for l in body if l.strip()]
-                quote_t = ls[0] if ls else ""
-                speaker = ls[1] if len(ls) > 1 else ""
+                quote_t = _esc(ls[0]) if ls else ""
+                speaker = _esc(ls[1]) if len(ls) > 1 else ""
                 sp = f'<div class="pull-speaker">{speaker}</div>' if speaker else ""
                 out.append(f'<section class="pullquote"><div class="pull-text">{quote_t}</div>{sp}</section>')
             elif kind == "stat":
                 ls = [l.strip() for l in body if l.strip()]
-                value = ls[0] if ls else ""
-                label = ls[1] if len(ls) > 1 else ""
+                value = _esc(ls[0]) if ls else ""
+                label = _esc(ls[1]) if len(ls) > 1 else ""
                 out.append(f'<div class="stat"><span class="stat-value">{value}</span>'
                            f'<span class="stat-label">{label}</span></div>')
             else:
-                t = f'<div class="callout-title">{title}</div>' if title else ""
-                out.append(f'<div class="callout callout-{kind}">{t}{MD.render(chr(10).join(body))}</div>')
+                t = f'<div class="callout-title">{_esc(title)}</div>' if title else ""
+                out.append(f'<div class="callout callout-{kind}">{t}'
+                           f'{parser.render(chr(10).join(body))}</div>')
         else:
             buf.append(lines[i]); i += 1
     flush()

@@ -26,7 +26,8 @@ def main():
     (d / "assets").mkdir(exist_ok=True)
 
     book = {"title": a.title, "subtitle": a.subtitle, "author": a.author,
-            "style": a.style, "length": a.length, "images": "vector"}
+            "style": a.style, "length": a.length, "images": "vector",
+            "slop_lint": "strict"}
     if a.brand:
         book["brand"] = a.brand
     if a.date:

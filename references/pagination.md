@@ -123,10 +123,11 @@ P9 되감기      실패 시 P7→P6→P3→(PLAN만)P2 역순. REFIT은 P3에�
 | G8-STRETCH | `gap > 0.18` AND `lines < 0.8N`, 또는 면 행송 편차 > 3% | FAIL — **억지 채움 본체 게이트**(1fr·과대 간격·행송 확대) |
 | G9-KEEP | 면 끝 제목 고립(마지막 행 span ≥ 1.15×본문 크기) / widow(면 첫 행 short & 앞 면 끝 full) / 캡션·도판 면 분리 | FAIL. orphan·runt는 WARN |
 | G10-QUOTE | **렌더 전 md 검사**: 콜아웃(quote/stat)의 12자 이상 분절·수치 토큰이 같은 챕터 본문에 실재(공백·인용부호·콤마 정규화, `약/가량/내외` 수식 시 ±5% 근사 허용) | HARD — 날조는 예외 없음 |
+| G13-SLOP | **렌더 전 md 검사**: 코드·링크 메타데이터를 제외한 본문의 AI-tell 지문. `strict`의 fail 레벨만 하드 실패 | HARD(strict) / 보고(warn) / 생략(off) |
 | G11-ROLES | pageroles.json 무결성: 코드 화이트리스트 / 기계 선행조건 / anchor 실재 / why 필수 / 예산 ≤ max(3, 8%) | HARD. anchor 불일치 = stale |
 | G12-PARITY | 장 시작 직전 빈 짝수 면(recto 맞춤)·스프레드 패딩 | HARD — 단면 전자책에 인쇄 관습 이식 금지 |
 
-**순서**: G10(렌더 전) → G1~G4 → G7-FRAME → G7-BLANK → G12 → G11 → G7-TAIL/MID → G8 → G9 → G7-DOC → G6(시각). 앞 단계 FAIL이면 뒤는 판정하지 않는다.
+**순서**: G10 → G13(렌더 전) → G1~G4 → G7-FRAME → G7-BLANK → G12 → G11 → G7-TAIL/MID → G8 → G9 → G7-DOC → G6(시각). 앞 단계 FAIL이면 뒤는 판정하지 않는다.
 
 **사유 코드 채널**: `<book_dir>/pageroles.json` — 1차 렌더 후 사람/에이전트가 작성. 각 항목 `{page, code, why(필수), anchor(그 면 실재 문자열)}`. **코드 6종**: `PART_DIVIDER`(텍스트 ≤3행) / `FULL_BLEED_PLATE`(imgarea ≥ 0.60) / `EXEC_SUMMARY`(business, ink 0.35~0.70, 폰트·여백 축소 금지) / `ESSAY_BREATH`(essay 꼬리, lines ≥ 6, 장당 1회) / `MAGAZINE_WHITESPACE`(진입점 존재 시) / `TOC_TAIL`(목차 직후 1면). 각 코드는 기계 선행조건 미충족 시 코드 자체가 FAIL(도장 방지). **폐기**(단면에서 재현 시 오히려 FAIL): RECTO_ADJUST·SIGNATURE_PAD·ENDPAPER·PART_DIVIDER_VERSO.
 
