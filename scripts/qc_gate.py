@@ -43,6 +43,41 @@ ROLE_CODES = {"PART_DIVIDER", "FULL_BLEED_PLATE", "EXEC_SUMMARY",
               "ESSAY_BREATH", "MAGAZINE_WHITESPACE", "TOC_TAIL"}
 
 
+def load_config_object(path, label):
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise SlopLintError(f"{label}: 파일이 없습니다 ({path})") from exc
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise SlopLintError(f"{label}: 읽을 수 없는 JSON입니다 ({path}): {exc}") from exc
+    if not isinstance(value, dict):
+        raise SlopLintError(f"{label}: 최상위 값은 객체여야 합니다")
+    return value
+
+
+def resolve_style_tokens(skill_root, style):
+    """확장 스타일을 허용하되 styles/ 바로 아래의 실제 디렉토리만 받는다."""
+    if (not isinstance(style, str) or not style or "/" in style or "\\" in style
+            or Path(style).name != style or style in {".", ".."}):
+        raise SlopLintError(
+            f"book.json style: styles/ 바로 아래의 디렉토리 이름이어야 합니다: '{style}'")
+
+    styles_root = (Path(skill_root) / "styles").resolve()
+    style_dir = Path(skill_root) / "styles" / style
+    if style_dir.is_symlink() or not style_dir.is_dir():
+        raise SlopLintError(f"book.json style: 스타일 디렉토리가 없습니다: styles/{style}")
+    try:
+        if style_dir.resolve().parent != styles_root:
+            raise SlopLintError(f"book.json style: styles/ 밖의 디렉토리는 허용하지 않습니다: '{style}'")
+    except OSError as exc:
+        raise SlopLintError(f"book.json style: 경로를 확인할 수 없습니다: {exc}") from exc
+
+    tokens_path = style_dir / "tokens.json"
+    if tokens_path.is_symlink() or not tokens_path.is_file():
+        raise SlopLintError(f"styles/{style}/tokens.json: 실제 파일이 필요합니다")
+    return tokens_path
+
+
 def norm(s):
     s = unicodedata.normalize("NFKC", s)
     s = re.sub(r"[\s​]+", "", s)
@@ -107,12 +142,18 @@ def main():
         sys.exit("usage: python3 scripts/qc_gate.py <book_dir> [--refit]")
     book_dir = Path(sys.argv[1]).resolve()
     refit = "--refit" in sys.argv[2:]
-    book = json.loads((book_dir / "book.json").read_text(encoding="utf-8"))
-    outline = json.loads((book_dir / "outline.json").read_text(encoding="utf-8"))
-    style = book["style"]
-    tokens = json.loads((SKILL / "styles" / style / "tokens.json").read_text(encoding="utf-8"))
     report = {"gates": {}, "warns": [], "pass": False}
     fails = []
+
+    try:
+        book = load_config_object(book_dir / "book.json", "book.json")
+        outline = load_config_object(book_dir / "outline.json", "outline.json")
+        style = book.get("style")
+        tokens_path = resolve_style_tokens(SKILL, style)
+        tokens = load_config_object(tokens_path, f"styles/{style}/tokens.json")
+    except SlopLintError as exc:
+        report["gates"]["CONFIG"] = {"error": str(exc), "ok": False}
+        finish(book_dir, report, [f"CONFIG: {exc} (fail-closed)"])
 
     # ---- G10 (렌더 전 — 날조는 빌드보다 먼저 잡는다) ----
     try:
@@ -145,7 +186,7 @@ def main():
     pdf = book_dir / "draft" / "book.pdf"
 
     # ---- G1 render + page count ----
-    g1 = {"exists": pdf.exists()}
+    g1 = {"exists": pdf.exists(), "ok": False}
     report["gates"]["G1"] = g1
     if not pdf.exists():
         finish(book_dir, report, ["G1: draft/book.pdf missing"])

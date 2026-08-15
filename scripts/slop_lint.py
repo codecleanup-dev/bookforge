@@ -33,8 +33,6 @@ from markdown_it.rules_inline.state_inline import StateInline
 SKILL = Path(__file__).resolve().parent.parent
 MARKDOWN = MarkdownIt("commonmark", {"html": False})
 
-FENCE_OPEN = re.compile(r"^ {0,3}(?P<marker>`{3,}|~{3,})(?P<rest>.*)$")
-FENCE_CLOSE = re.compile(r"^ {0,3}(?P<marker>`{3,}|~{3,})[ \t]*$")
 INLINE_TICKS = re.compile(r"`+")
 
 VALID_MODES = {"strict", "warn", "off"}
@@ -168,34 +166,19 @@ def _mask_markdown(text: str) -> str:
             if chars[pos] not in "\r\n":
                 chars[pos] = " "
 
-    # fenced code block: CommonMark의 최대 3칸 들여쓰기, 동일 문자·길이 이상 닫힘.
-    fence = None
-    offset = 0
-    for line in text.splitlines(keepends=True):
-        content = line.rstrip("\r\n")
-        if fence is not None:
-            closing = FENCE_CLOSE.match(content)
-            mask(offset, offset + len(line))
-            if closing:
-                marker = closing.group("marker")
-                if marker[0] == fence[0] and len(marker) >= fence[1]:
-                    fence = None
-        else:
-            opening = FENCE_OPEN.match(content)
-            if opening:
-                marker, rest = opening.group("marker"), opening.group("rest")
-                if marker[0] == "~" or "`" not in rest:
-                    fence = (marker[0], len(marker))
-                    mask(offset, offset + len(line))
-        offset += len(line)
-
-    # 같은 CommonMark 파서가 인정한 reference definition은 출력되지 않으므로 전부 제외한다.
+    # 같은 CommonMark 파서가 인정한 코드 블록과 reference definition을 제외한다.
+    # token.map을 쓰면 최상위뿐 아니라 인용·목록 fence와 들여쓰기 코드도 같은
+    # 렌더 계약으로 처리되어 닫는 fence 오인이 이후 산문을 가리는 일을 막는다.
     markdown_env = {}
     block_tokens = MARKDOWN.parse(text, markdown_env)
     lines = text.splitlines(keepends=True)
     line_offsets = [0]
     for line in lines:
         line_offsets.append(line_offsets[-1] + len(line))
+    for token in block_tokens:
+        if token.type in {"fence", "code_block"} and token.map:
+            start_line, end_line = token.map
+            mask(line_offsets[start_line], line_offsets[min(end_line, len(lines))])
     references = list(markdown_env.get("references", {}).values())
     references.extend(markdown_env.get("duplicate_refs", []))
     for reference in references:
@@ -264,7 +247,7 @@ def _timeout_seconds() -> float:
     except ValueError as exc:
         raise SlopLintError(f"SLOP_LINT_TIMEOUT은 0 이상의 숫자여야 합니다: '{raw}'") from exc
     if not math.isfinite(value) or value < 0:
-        raise SlopLintError(f"SLOP_LINT_TIMEOUT은 0 이상의 숫자여야 합니다: '{raw}'")
+        raise SlopLintError(f"SLOP_LINT_TIMEOUT은 유한한 0 이상의 숫자여야 합니다: '{raw}'")
     return value
 
 
@@ -276,8 +259,12 @@ def _scan_deadline(seconds: float):
     def _timeout(_signum, _frame):
         raise _ScanTimeout
 
-    signal.signal(signal.SIGALRM, _timeout)
-    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        signal.signal(signal.SIGALRM, _timeout)
+        signal.setitimer(signal.ITIMER_REAL, seconds)
+    except (OSError, OverflowError, ValueError) as exc:
+        signal.signal(signal.SIGALRM, previous_handler)
+        raise SlopLintError(f"slop-lint timeout을 설정할 수 없습니다: {exc}") from exc
     try:
         yield
     except _ScanTimeout as exc:
@@ -300,6 +287,10 @@ def _scan_chapters(chapters: list[tuple[str, Path]], patterns: list[dict]) -> li
                 zip(raw.split("\n"), masked.split("\n"), strict=True), 1):
             for pattern in patterns:
                 for match in pattern["re"].finditer(scan_line):
+                    if match.start() == match.end():
+                        raise SlopLintError(
+                            f"slop-patterns: 0자 길이 매치는 허용하지 않습니다 "
+                            f"(id={pattern['id']}, chapters/{name}:{lineno})")
                     lo, hi = max(0, match.start() - 18), min(len(line), match.end() + 18)
                     findings.append({
                         "file": name, "line": lineno, "col": match.start() + 1,
@@ -351,7 +342,7 @@ def _scan_in_worker(chapters, patterns, seconds: float):
         if status != "ok":
             raise SlopLintError(payload)
         return payload
-    except (OSError, RuntimeError) as exc:
+    except (OSError, OverflowError, RuntimeError, ValueError) as exc:
         raise SlopLintError(f"slop-lint 격리 worker를 시작할 수 없습니다: {exc}") from exc
     finally:
         send_conn.close()
