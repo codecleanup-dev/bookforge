@@ -26,7 +26,7 @@ import fitz  # PyMuPDF
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from pagemetrics import analyze  # noqa: E402
-from slop_lint import lint_book  # noqa: E402
+from slop_lint import SlopLintError, lint_book, resolve_chapter_files  # noqa: E402
 
 SKILL = Path(__file__).resolve().parent.parent
 TOL = 1.5  # pt
@@ -53,11 +53,13 @@ def norm(s):
 def g10_quote_check(book_dir, outline):
     """렌더 전 md 검사: pull 인용 분절(≥12자)과 stat/콜아웃 수치의 본문 실재."""
     problems = []
+    chapter_paths = dict(resolve_chapter_files(book_dir, outline))
     for ch in outline["chapters"]:
-        p = book_dir / "chapters" / ch["file"]
-        if not p.exists():
-            continue
-        raw = p.read_text(encoding="utf-8")
+        p = chapter_paths[ch["file"]]
+        try:
+            raw = p.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise SlopLintError(f"chapters/{ch['file']}: 읽을 수 없습니다: {exc}") from exc
         callouts = re.findall(r"^:::\s*(pull|stat|quote|info|tip|warn)[^\n]*\n(.*?)^:::\s*$",
                               raw, re.S | re.M)
         body = re.sub(r"^:::.*?^:::\s*$", "", raw, flags=re.S | re.M)
@@ -113,13 +115,21 @@ def main():
     fails = []
 
     # ---- G10 (렌더 전 — 날조는 빌드보다 먼저 잡는다) ----
-    g10 = g10_quote_check(book_dir, outline)
+    try:
+        g10 = g10_quote_check(book_dir, outline)
+    except SlopLintError as exc:
+        report["gates"]["G10"] = {"problems": [str(exc)], "ok": False}
+        finish(book_dir, report, [f"G10: {exc} (fail-closed)"])
     report["gates"]["G10"] = {"problems": g10, "ok": not g10}
     if g10:
         finish(book_dir, report, ["G10: " + p for p in g10])
 
     # ---- G13 (렌더 전 — AI-tell 지문. strict 모드만 하드, warn은 보고, off는 생략) ----
-    slop = lint_book(book_dir)
+    try:
+        slop = lint_book(book_dir)
+    except SlopLintError as exc:
+        report["gates"]["G13"] = {"error": str(exc), "ok": False}
+        finish(book_dir, report, [f"G13: {exc} (fail-closed)"])
     g13_fail = slop["mode"] == "strict" and slop["counts"]["fail"] > 0
     report["gates"]["G13"] = {"mode": slop["mode"], "counts": slop["counts"],
                               "findings": slop["findings"][:50], "ok": not g13_fail}
@@ -131,12 +141,12 @@ def main():
         msg = (f"G13: slop 지문 fail {slop['counts']['fail']} · warn {slop['counts']['warn']} "
                f"(모드 {slop['mode']} — preview.py 하이라이트로 확인)")
         report["warns"].append(msg)
-        print("WARN " + msg)
 
     pdf = book_dir / "draft" / "book.pdf"
 
     # ---- G1 render + page count ----
     g1 = {"exists": pdf.exists()}
+    report["gates"]["G1"] = g1
     if not pdf.exists():
         finish(book_dir, report, ["G1: draft/book.pdf missing"])
     doc = fitz.open(pdf)
@@ -144,7 +154,6 @@ def main():
     lo, hi = tokens.get("length_pages", {}).get(book.get("length", "short"), [10, 400])
     in_range = lo <= n <= hi
     g1.update({"pages": n, "range": [lo, hi], "ok": in_range or refit, "refit": refit})
-    report["gates"]["G1"] = g1
     if not in_range:
         msg = f"G1: page count {n} outside [{lo},{hi}]"
         if refit:

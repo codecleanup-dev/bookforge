@@ -14,13 +14,17 @@ Usage: python3 preview.py <book_dir>   ->  <book_dir>/preview/manuscript.html
 """
 import html as _html
 import json
+import os
 import re
+import secrets
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_html import md_to_html  # noqa: E402
-from slop_lint import lint_book    # noqa: E402
+from slop_lint import (SlopLintError, lint_book,  # noqa: E402
+                       resolve_chapter_files)
 
 CSS = """
 :root { --ink:#20242c; --sub:#5c6070; --line:rgba(32,36,44,.14); --mark:#ffe08a;
@@ -90,43 +94,83 @@ def _wrap_tables(body_html: str, ch_idx: int) -> str:
         wrap, body_html, flags=re.S)
 
 
-def _highlight(body_html: str, matches: list) -> str:
-    """slop 매치 문자열을 본문에서 <mark> 처리. 태그 내부는 건드리지 않는다."""
-    for token in sorted({m for m in matches if m.strip()}, key=len, reverse=True):
-        esc = _html.escape(token)
-        pattern = re.compile(r"(?<!<mark class=\"slop\">)" + re.escape(esc) + r"(?![^<]*>)")
-        body_html = pattern.sub(f'<mark class="slop">{esc}</mark>', body_html)
-    return body_html
+def _mark_findings(source: str, findings: list, first_line: int) -> tuple[str, str | None]:
+    """finding의 실제 행·열에 렌더 후 치환할 고유 마커를 삽입한다.
+
+    같은 문자열의 비검출 위치나 코드 영역까지 하이라이트하던 전역 문자열 치환을 피한다.
+    """
+    lines = source.splitlines(keepends=True)
+    by_line = {}
+    for finding in findings:
+        line_idx = finding["line"] - first_line
+        if 0 <= line_idx < len(lines):
+            start = finding["col"] - 1
+            end = start + len(finding["match"])
+            if lines[line_idx][start:end] == finding["match"] and start < end:
+                by_line.setdefault(line_idx, set()).add((start, end))
+
+    nonce = secrets.token_hex(10)
+    marker_no = 0
+    for line_idx, ranges in by_line.items():
+        selected = []
+        last_end = -1
+        for start, end in sorted(ranges):
+            if start < last_end:
+                continue
+            selected.append((start, end))
+            last_end = end
+        parts = []
+        cursor = 0
+        for start, end in selected:
+            marker_no += 1
+            opening = f"\ue000bf-{nonce}-{marker_no}-open\ue001"
+            closing = f"\ue000bf-{nonce}-{marker_no}-close\ue001"
+            parts.extend((lines[line_idx][cursor:start], opening,
+                          lines[line_idx][start:end], closing))
+            cursor = end
+        parts.append(lines[line_idx][cursor:])
+        lines[line_idx] = "".join(parts)
+    return "".join(lines), nonce if marker_no else None
+
+
+def _render_marks(body_html: str, nonce: str | None) -> str:
+    if nonce is None:
+        return body_html
+    marker = re.compile(rf"\ue000bf-{re.escape(nonce)}-\d+-(open|close)\ue001")
+    return marker.sub(lambda match: '<mark class="slop">' if match.group(1) == "open"
+                      else "</mark>", body_html)
 
 
 def main():
     if len(sys.argv) < 2:
         sys.exit("usage: python3 scripts/preview.py <book_dir>")
     book_dir = Path(sys.argv[1]).resolve()
-    book = json.loads((book_dir / "book.json").read_text(encoding="utf-8"))
-    outline = json.loads((book_dir / "outline.json").read_text(encoding="utf-8"))
-    lint = lint_book(book_dir)
+    try:
+        book = json.loads((book_dir / "book.json").read_text(encoding="utf-8"))
+        outline = json.loads((book_dir / "outline.json").read_text(encoding="utf-8"))
+        chapter_paths = dict(resolve_chapter_files(book_dir, outline))
+        lint = lint_book(book_dir)
+    except (OSError, UnicodeError, json.JSONDecodeError, SlopLintError) as exc:
+        sys.exit(f"preview: {exc} (fail-closed)")
     by_file = {}
     for f in lint["findings"]:
         by_file.setdefault(f["file"], []).append(f)
 
     total = 0
     sections = []
-    ch_dir = (book_dir / "chapters").resolve()
     for idx, ch in enumerate(outline["chapters"], 1):
-        # outline의 file 값은 신뢰하지 않는다 — chapters/ 바로 아래의 일반 파일만 허용
-        # (절대경로·..·심볼릭 링크로 임의 파일이 프리뷰에 실리는 것 차단)
-        src = (ch_dir / ch["file"]).resolve()
-        if src.parent != ch_dir or not src.is_file():
-            sys.exit(f"outline.json: 잘못된 chapter file '{ch['file']}' — "
-                     f"chapters/ 바로 아래 파일명만 허용")
+        src = chapter_paths[ch["file"]]
         raw = src.read_text(encoding="utf-8")
-        raw_body = re.sub(r"^#\s+.*\n", "", raw, count=1)
+        heading = re.match(r"^#\s+.*(?:\n|$)", raw)
+        raw_body = raw[heading.end():] if heading else raw
+        first_body_line = raw[:heading.end()].count("\n") + 1 if heading else 1
         n = _stats(raw_body)
         total += n
-        body = md_to_html(raw_body)
+        marked_body, marker_nonce = _mark_findings(
+            raw_body, by_file.get(ch["file"], []), first_body_line)
+        body = md_to_html(marked_body, allow_html=False)
         body = _wrap_tables(body, idx)
-        body = _highlight(body, [f["match"] for f in by_file.get(ch["file"], [])])
+        body = _render_marks(body, marker_nonce)
         sections.append(
             f'<section class="chapter" id="ch{idx:02d}">'
             f'<div class="ch-head"><div class="ch-num">{idx:02d} · {_html.escape(ch["file"])}</div>'
@@ -158,14 +202,17 @@ def main():
                      f'<div class="meta">본문 하이라이트 = 검출 지점. fail은 strict 모드에서 '
                      f'G13 하드 실패, warn은 사람 판단.</div></div>')
 
+    style_nonce = secrets.token_urlsafe(18)
     doc = (
         '<!doctype html><html lang="ko"><head><meta charset="utf-8">'
-        # 검수 표면은 데이터 뷰어다 — 원고 유래 HTML이 섞여도 스크립트는 실행 금지 (XSS 차단)
-        '<meta http-equiv="Content-Security-Policy" content="script-src \'none\'; '
-        'object-src \'none\'; base-uri \'none\'; form-action \'none\'">'
+        # 검수 표면은 데이터 뷰어다 — 원고 유래 HTML이 섞여도 스크립트 실행·원격 요청·
+        # CSS/iframe 오버레이(검수 패널 은폐)를 전부 막는다. 이미지는 로컬(file:/data:)만.
+        '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; '
+        f'img-src file: data:; style-src \'nonce-{style_nonce}\'; script-src \'none\'; '
+        'object-src \'none\'; frame-src \'none\'; base-uri \'none\'; form-action \'none\'">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f'<title>원고 검수 · {_html.escape(book.get("title", ""))}</title>'
-        f'<style>{CSS}</style></head><body><div class="wrap">'
+        f'<style nonce="{style_nonce}">{CSS}</style></head><body><div class="wrap">'
         f'<header class="book"><h1>{_html.escape(book.get("title", ""))}</h1>'
         f'<div class="sub">{_html.escape(book.get("subtitle") or "")}</div>'
         f'<div class="meta">P1.5 원고 검수용 (페이지 분할 없음) · '
@@ -178,9 +225,34 @@ def main():
         '</div></body></html>')
 
     out_dir = book_dir / "preview"
-    out_dir.mkdir(exist_ok=True)
+    if out_dir.is_symlink():
+        sys.exit("preview/ 가 심볼릭 링크입니다 — 실제 디렉토리여야 합니다")
+    try:
+        out_dir.mkdir(exist_ok=True)
+    except OSError as exc:
+        sys.exit(f"preview/ 디렉토리를 만들 수 없습니다: {exc}")
+    if out_dir.is_symlink() or not out_dir.is_dir():
+        sys.exit("preview/ 가 실제 디렉토리가 아닙니다")
     out = out_dir / "manuscript.html"
-    out.write_text(doc, encoding="utf-8")
+    # 예측 불가능한 O_EXCL 임시파일 + 원자 교체: 선점 symlink와 동시 실행을 모두 피한다.
+    tmp = None
+    try:
+        fd, tmp_name = tempfile.mkstemp(prefix=".manuscript.", suffix=".tmp", dir=out_dir)
+        tmp = Path(tmp_name)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(doc)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, out)
+        tmp = None
+    except OSError as exc:
+        sys.exit(f"preview HTML을 원자적으로 쓸 수 없습니다: {exc}")
+    finally:
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
     print(f"OK preview: {out} (총 {total:,}자, slop fail {lint['counts']['fail']} · "
           f"warn {lint['counts']['warn']})")
 

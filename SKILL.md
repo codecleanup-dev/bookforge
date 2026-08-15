@@ -87,6 +87,7 @@ python3 <SKILL>/scripts/slop_lint.py <book_dir>   # 지문 검사만 따로 돌�
 
 - slop 지문 정의: `styles/slop-patterns.json`(기본) 또는 `<book_dir>/slop-patterns.json`(통째 오버라이드). fail 레벨(엠대시 등)은 재서술 필수, warn 레벨(슬래시 접합 등)은 정당한 데이터 나열인지 사람이 판단한다.
 - 게이트 모드: book.json `"slop_lint"` = `strict`(fail 지문 = G13 하드 실패, 신규 스캐폴드 기본) / `warn`(보고만 — 키 없는 기존 책 기본) / `off`.
+- 사용자 패턴은 기본 10초 안에 검사를 끝내야 한다. 격리된 신뢰 환경에서만 `SLOP_LINT_TIMEOUT=0`으로 timeout을 끌 수 있다.
 - HTML 트랙(insight·magazine)은 빌드 후 `typeset/book.html`을 열고 **브라우저 인쇄 미리보기**로 페이지 분할까지 사전 확인할 수 있다 — 인쇄 엔진이 곧 PDF 엔진이다.
 
 ## P2-4 — 빌드와 게이트

@@ -56,6 +56,7 @@ Or drive it manually:
 ```bash
 python3 scripts/scaffold.py mybook --style essay --title "Title" --length short
 # write chapters/*.md + outline.json, then
+python3 scripts/preview.py mybook      # → preview/manuscript.html (manuscript + slop review)
 python3 scripts/build.py mybook        # → draft/book.pdf
 python3 scripts/qc_gate.py mybook      # gates pass → final/mybook.pdf
 ```
@@ -64,7 +65,7 @@ python3 scripts/qc_gate.py mybook      # gates pass → final/mybook.pdf
 
 Page breaking, filling, and intentional whitespace follow a pagination rulebook ([references/pagination.md](references/pagination.md)) distilled from measurements of commercial Korean books; density gates catch both unjustified emptiness and forced filler.
 
-Only the gate script can create `final/`: G1 render + page-count range · G2 all fonts embedded · G3 zero bbox overflow · G4 TOC/bookmarks match actual chapter pages · G5 zero unintended blank pages · G6 visual inspection of rendered pages by the agent.
+Only the gate script can create `final/`. Before rendering, G10 verifies that quotations and figures exist in the manuscript and G13 checks AI-tell fingerprints (`strict`/`warn`/`off`). The remaining gates cover rendering, page range, embedded fonts, overflow, TOC/page alignment, density, intentional whitespace, keep/widow rules, role declarations, and parity; G6 is the agent's visual inspection of rendered pages.
 
 Generated art policy: cover/body art must be **text-free generated images**; all lettering is set as vectors by the layout layer, and books containing generated images say so in captions and the colophon.
 
